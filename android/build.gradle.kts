@@ -20,21 +20,31 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
-// Solución para plugins antiguos sin namespace (como flutter_bluetooth_serial)
+// Corrige plugins Android antiguos que no declaran `namespace` (AGP 8+ lo exige).
 subprojects {
-    afterEvaluate {
-        if (project.extensions.findByName("android") != null) {
-            val android = project.extensions.getByName("android")
-            try {
-                // Usando reflexión para evitar errores de compilación de Gradle si el tipo no está disponible
-                val getNamespace = android.javaClass.getMethod("getNamespace")
-                val setNamespace = android.javaClass.getMethod("setNamespace", String::class.java)
-                if (getNamespace.invoke(android) == null) {
-                    setNamespace.invoke(android, "io.github.edufolly." + project.name.replace("-", "_"))
+    pluginManager.withPlugin("com.android.library") {
+        val androidExtension =
+            extensions.findByName("android")
+                ?: error("Android extension no encontrada en ${project.path}")
+
+        val getNamespace =
+            androidExtension.javaClass.methods.firstOrNull {
+                it.name == "getNamespace" && it.parameterCount == 0
+            } ?: error("No se encontró getNamespace() para ${project.path}")
+
+        val setNamespace =
+            androidExtension.javaClass.methods.firstOrNull {
+                it.name == "setNamespace" && it.parameterCount == 1
+            } ?: error("No se encontró setNamespace(String) para ${project.path}")
+
+        val currentNamespace = getNamespace.invoke(androidExtension) as String?
+        if (currentNamespace.isNullOrBlank()) {
+            val namespace =
+                when (project.name) {
+                    "flutter_bluetooth_serial" -> "io.github.edufolly.flutterbluetoothserial"
+                    else -> "com.autogen.${project.name.replace("-", "_")}"
                 }
-            } catch (e: Exception) {
-                // Fallback o ignorar si no se puede establecer
-            }
+            setNamespace.invoke(androidExtension, namespace)
         }
     }
 }
