@@ -64,9 +64,8 @@ class _ControlScreenState extends State<ControlScreen> {
                 ListTile(
                   leading: const Icon(Icons.bluetooth_disabled, color: Colors.red),
                   title: const Text('Desconectar'),
-                  onTap: () async {
-                    await ctrl.disconnect();
-                    if (!mounted) return;
+                  onTap: () {
+                    ctrl.disconnect();
                     Navigator.pushReplacement(context,
                         MaterialPageRoute(builder: (_) => const ScanScreen()));
                   },
@@ -128,30 +127,6 @@ class _ControlScreenState extends State<ControlScreen> {
 
               const SizedBox(height: 10),
 
-              // ── TARJETA: VELOCIDAD ───────────────────────────
-              _Card(
-                title: 'Velocidad  (${ctrl.velocidad} ms/paso)',
-                child: Column(children: [
-                  Slider(
-                    min: 1, max: 50, divisions: 49,
-                    value: ctrl.velocidad.toDouble(),
-                    onChanged: (v) => ctrl.setVelocidad(v.round()),
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [1, 5, 20, 50].map((v) => OutlinedButton(
-                      style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          textStyle: const TextStyle(fontSize: 11)),
-                      onPressed: () => ctrl.setVelocidad(v),
-                      child: Text('V:$v'),
-                    )).toList(),
-                  ),
-                ]),
-              ),
-
-              const SizedBox(height: 10),
-
               // ── TARJETA: MODO DE PASO ─────────────────────────
               _Card(
                 title: 'Modo de paso',
@@ -197,7 +172,7 @@ class _ControlScreenState extends State<ControlScreen> {
                     childAspectRatio: 2.5,
                     children: [
                       _TeleItem(label: 'Posición', value: '${ctrl.posicion}', unit: 'pasos'),
-                      _TeleItem(label: 'Ángulo', value: '${ctrl.grados.toStringAsFixed(1)}', unit: '°'),
+                      _TeleItem(label: 'Ángulo', value: ctrl.grados.toStringAsFixed(1), unit: '°'),
                       _TeleItem(label: 'Voltaje', value: ctrl.voltaje.toStringAsFixed(2), unit: 'V'),
                       _TeleItem(label: 'Vel actual', value: '${ctrl.velRecibida}', unit: 'ms'),
                     ],
