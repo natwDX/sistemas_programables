@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
@@ -15,6 +16,7 @@ class BtController extends ChangeNotifier {
   BtState btState = BtState.disconnected;
   String connectedDeviceName = '';
   String _buffer = ''; // buffer para armar líneas incompletas
+  Timer? _statusTimer;
 
   // ── Estado del motor ─────────────────────────────────────────────
   bool motorActivo = false;
@@ -46,6 +48,7 @@ class BtController extends ChangeNotifier {
       btState = BtState.connected;
       _addLog('>> Conectado a $connectedDeviceName');
       _listenToStream();
+      _startStatusPolling();
       notifyListeners();
       return true;
     } catch (e) {
@@ -57,6 +60,7 @@ class BtController extends ChangeNotifier {
   }
 
   Future<void> disconnect() async {
+    _stopStatusPolling();
     await _connection?.finish();
     _connection = null;
     btState = BtState.disconnected;
@@ -70,11 +74,11 @@ class BtController extends ChangeNotifier {
   //  ENVÍO DE COMANDOS (Protocolo Arduino HC-05)
   // ─────────────────────────────────────────────────────────────────
 
-  void sendCommand(String cmd) {
+  void sendCommand(String cmd, {bool log = true}) {
     if (_connection == null || !_connection!.isConnected) return;
     final data = Uint8List.fromList(utf8.encode('$cmd\n'));
     _connection!.output.add(data);
-    _addLog('> $cmd');
+    if (log) _addLog('> $cmd');
   }
 
   void _syncWithArduino() {
@@ -132,7 +136,7 @@ class BtController extends ChangeNotifier {
   }
 
   void pedirVoltaje() {
-    _addLog('Info: El firmware actual no soporta lectura de voltaje.');
+    sendCommand('STATUS');
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -151,6 +155,7 @@ class BtController extends ChangeNotifier {
         }
       },
       onDone: () {
+        _stopStatusPolling();
         btState = BtState.disconnected;
         motorActivo = false;
         _addLog('>> Conexión cerrada');
@@ -161,12 +166,77 @@ class BtController extends ChangeNotifier {
 
   void _parseLine(String line) {
     _addLog('< $line');
+    _parseTelemetry(line);
     if (line.contains('Modo:')) {
       if (line.contains('CW')) sentidoCW = true;
       if (line.contains('CCW')) sentidoCW = false;
       if (line.contains('STOP')) motorActivo = false;
     }
     notifyListeners();
+  }
+
+  void _startStatusPolling() {
+    _stopStatusPolling();
+    _statusTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (_connection != null && _connection!.isConnected) {
+        sendCommand('STATUS', log: false);
+      } else {
+        _stopStatusPolling();
+      }
+    });
+  }
+
+  void _stopStatusPolling() {
+    _statusTimer?.cancel();
+    _statusTimer = null;
+  }
+
+  void _parseTelemetry(String line) {
+    final telemetryMatches = RegExp(
+      r'([A-Za-zÁÉÍÓÚáéíóú]+)\s*[:=]\s*([-+]?\d+(?:\.\d+)?)',
+    ).allMatches(line);
+
+    for (final m in telemetryMatches) {
+      final key = _normalizeKey(m.group(1)!);
+      final value = m.group(2)!;
+
+      switch (key) {
+        case 'enc':
+        case 'encoder':
+        case 'pos':
+        case 'posicion':
+        case 'pasos':
+        case 'steps':
+          posicion = int.tryParse(value) ?? posicion;
+          break;
+        case 'grados':
+        case 'angulo':
+        case 'angle':
+        case 'deg':
+          grados = double.tryParse(value) ?? grados;
+          break;
+        case 'v':
+        case 'volt':
+        case 'voltaje':
+          voltaje = double.tryParse(value) ?? voltaje;
+          break;
+        case 'vel':
+        case 'velocidad':
+        case 'ms':
+          velRecibida = int.tryParse(value) ?? velRecibida;
+          break;
+      }
+    }
+  }
+
+  String _normalizeKey(String key) {
+    return key
+        .toLowerCase()
+        .replaceAll('á', 'a')
+        .replaceAll('é', 'e')
+        .replaceAll('í', 'i')
+        .replaceAll('ó', 'o')
+        .replaceAll('ú', 'u');
   }
 
   void _addLog(String msg) {
@@ -178,5 +248,12 @@ class BtController extends ChangeNotifier {
   void clearLog() {
     serialLog.clear();
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _stopStatusPolling();
+    _connection?.dispose();
+    super.dispose();
   }
 }
