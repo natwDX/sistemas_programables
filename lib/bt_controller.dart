@@ -6,7 +6,7 @@ import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 /// Estados posibles de la conexión Bluetooth
 enum BtState { disconnected, connecting, connected }
 
-/// Modos de paso del motor
+/// Modos de paso del motor (Simple, Doble, Medio)
 enum StepMode { simple, doble, medio }
 
 class BtController extends ChangeNotifier {
@@ -19,14 +19,14 @@ class BtController extends ChangeNotifier {
   // ── Estado del motor ─────────────────────────────────────────────
   bool motorActivo = false;
   bool sentidoCW = true;          // true = CW, false = CCW
-  int velocidad = 5;              // ms entre pasos (1–50)
   StepMode stepMode = StepMode.simple;
+  int velocidad = 5;              // ms entre pasos (valor local para UI)
 
   // ── Telemetría (llegando del Arduino) ────────────────────────────
   int posicion = 0;
   double grados = 0.0;
   double voltaje = 0.0;
-  int velRecibida = 5;
+  int velRecibida = 0;
 
   // ── Consola serial ───────────────────────────────────────────────
   final List<String> serialLog = [];
@@ -67,7 +67,7 @@ class BtController extends ChangeNotifier {
   }
 
   // ─────────────────────────────────────────────────────────────────
-  //  ENVÍO DE COMANDOS
+  //  ENVÍO DE COMANDOS (Protocolo Arduino HC-05)
   // ─────────────────────────────────────────────────────────────────
 
   void sendCommand(String cmd) {
@@ -77,53 +77,72 @@ class BtController extends ChangeNotifier {
     _addLog('> $cmd');
   }
 
+  void _syncWithArduino() {
+    if (!motorActivo) {
+      sendCommand('STOP');
+      return;
+    }
+
+    String cmd = '';
+    if (sentidoCW) {
+      cmd = switch (stepMode) {
+        StepMode.simple => 'OSP',
+        StepMode.doble  => 'ODP',
+        StepMode.medio  => 'OMP',
+      };
+    } else {
+      cmd = switch (stepMode) {
+        StepMode.simple => 'CSP',
+        StepMode.doble  => 'CDP',
+        StepMode.medio  => 'CMP',
+      };
+    }
+    sendCommand(cmd);
+  }
+
   void toggleMotor() {
     motorActivo = !motorActivo;
-    sendCommand(motorActivo ? 'START' : 'STOP');
+    _syncWithArduino();
     notifyListeners();
   }
 
   void setSentido(bool cw) {
     sentidoCW = cw;
-    sendCommand(cw ? 'CW' : 'CCW');
-    notifyListeners();
-  }
-
-  void setVelocidad(int ms) {
-    velocidad = ms;
-    sendCommand('V:$ms');
+    if (motorActivo) _syncWithArduino();
     notifyListeners();
   }
 
   void setStepMode(StepMode mode) {
     stepMode = mode;
-    final cmd = switch (mode) {
-      StepMode.simple => 'S1',
-      StepMode.doble  => 'S2',
-      StepMode.medio  => 'SM',
-    };
-    sendCommand(cmd);
+    if (motorActivo) _syncWithArduino();
+    notifyListeners();
+  }
+
+  void setVelocidad(int ms) {
+    velocidad = ms;
+    _addLog('Info: Velocidad ajustada localmente a $ms ms/paso.');
     notifyListeners();
   }
 
   void resetPosicion() {
-    sendCommand('RESET');
     posicion = 0;
     grados = 0.0;
+    _addLog('Local: Posición reseteada');
     notifyListeners();
   }
 
-  void pedirVoltaje() => sendCommand('READ');
+  void pedirVoltaje() {
+    _addLog('Info: El firmware actual no soporta lectura de voltaje.');
+  }
 
   // ─────────────────────────────────────────────────────────────────
-  //  RECEPCIÓN DE TELEMETRÍA
+  //  RECEPCIÓN DE RESPUESTAS
   // ─────────────────────────────────────────────────────────────────
 
   void _listenToStream() {
     _connection!.input!.listen(
       (Uint8List data) {
         _buffer += utf8.decode(data, allowMalformed: true);
-        // Procesar líneas completas
         while (_buffer.contains('\n')) {
           final idx = _buffer.indexOf('\n');
           final line = _buffer.substring(0, idx).trim();
@@ -134,7 +153,7 @@ class BtController extends ChangeNotifier {
       onDone: () {
         btState = BtState.disconnected;
         motorActivo = false;
-        _addLog('>> Conexión cerrada por el dispositivo');
+        _addLog('>> Conexión cerrada');
         notifyListeners();
       },
     );
@@ -142,34 +161,18 @@ class BtController extends ChangeNotifier {
 
   void _parseLine(String line) {
     _addLog('< $line');
-
-    if (line.startsWith('POS:')) {
-      posicion = int.tryParse(line.substring(4)) ?? posicion;
-      // Calcular grados: 28BYJ-48 half-step = 4096 pasos/rev
-      grados = (posicion % 4096) / 4096.0 * 360.0;
-      if (grados < 0) grados += 360.0;
-    } else if (line.startsWith('VOL:')) {
-      voltaje = double.tryParse(line.substring(4)) ?? voltaje;
-    } else if (line.startsWith('VEL:')) {
-      velRecibida = int.tryParse(line.substring(4)) ?? velRecibida;
-      velocidad = velRecibida;
-    } else if (line.startsWith('DIR:')) {
-      sentidoCW = line.substring(4).trim() == 'CW';
+    if (line.contains('Modo:')) {
+      if (line.contains('CW')) sentidoCW = true;
+      if (line.contains('CCW')) sentidoCW = false;
+      if (line.contains('STOP')) motorActivo = false;
     }
-
     notifyListeners();
   }
-
-  // ─────────────────────────────────────────────────────────────────
-  //  LOG
-  // ─────────────────────────────────────────────────────────────────
 
   void _addLog(String msg) {
     serialLog.add(msg);
     if (serialLog.length > _maxLog) serialLog.removeAt(0);
-    // No llamamos notifyListeners() aquí para no re-renderizar
-    // toda la UI solo por un log; el ScrollController de la consola
-    // se actualiza por separado.
+    notifyListeners();
   }
 
   void clearLog() {

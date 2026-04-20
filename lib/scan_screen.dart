@@ -14,39 +14,65 @@ class ScanScreen extends StatefulWidget {
 
 class _ScanScreenState extends State<ScanScreen> {
   List<BluetoothDevice> _devices = [];
-  bool _scanning = false;
+  bool _isLoading = false;
 
   @override
   void initState() {
     super.initState();
-    _requestPermsAndScan();
+    _initBluetooth();
   }
 
-  Future<void> _requestPermsAndScan() async {
-    // Android 12+ requiere BLUETOOTH_SCAN + BLUETOOTH_CONNECT
+  Future<void> _initBluetooth() async {
+    setState(() => _isLoading = true);
+    
+    // 1. Pedir permisos (Crítico en Android)
     await [
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
       Permission.locationWhenInUse,
     ].request();
-    _scanDevices();
+
+    // 2. Verificar si el Bluetooth está encendido
+    bool? isEnabled = await FlutterBluetoothSerial.instance.isEnabled;
+    if (isEnabled != true) {
+      await FlutterBluetoothSerial.instance.requestEnable();
+    }
+
+    _fetchBondedDevices();
   }
 
-  Future<void> _scanDevices() async {
-    setState(() { _scanning = true; _devices = []; });
-
-    // Dispositivos ya emparejados (el HC-06 suele estar aquí)
-    final bonded = await FlutterBluetoothSerial.instance.getBondedDevices();
-    setState(() {
-      _devices = bonded;
-      _scanning = false;
-    });
+  Future<void> _fetchBondedDevices() async {
+    setState(() => _isLoading = true);
+    try {
+      // Obtenemos los dispositivos que ya están vinculados en Ajustes del Celular
+      List<BluetoothDevice> bondedDevices = await FlutterBluetoothSerial.instance.getBondedDevices();
+      setState(() {
+        _devices = bondedDevices;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error al obtener dispositivos: $e')),
+      );
+    }
   }
 
   Future<void> _connect(BluetoothDevice device) async {
     final ctrl = context.read<BtController>();
+    
+    // Mostramos un indicador de carga mientras conecta
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
     final ok = await ctrl.connect(device);
+    
     if (!mounted) return;
+    Navigator.pop(context); // Quitar el círculo de carga
+
     if (ok) {
       Navigator.pushReplacement(
         context,
@@ -54,7 +80,7 @@ class _ScanScreenState extends State<ScanScreen> {
       );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo conectar. ¿Está encendido el HC-06?')),
+        const SnackBar(content: Text('Error de conexión. Asegúrate que el HC-05 esté encendido.')),
       );
     }
   }
@@ -65,96 +91,63 @@ class _ScanScreenState extends State<ScanScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Conectar dispositivo'),
-        backgroundColor: cs.primary,
-        foregroundColor: Colors.white,
+        title: const Text('Dispositivos Vinculados'),
         actions: [
           IconButton(
-            icon: _scanning
-                ? const SizedBox(width: 20, height: 20,
-                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                : const Icon(Icons.refresh),
-            onPressed: _scanning ? null : _scanDevices,
-          ),
+            icon: const Icon(Icons.refresh),
+            onPressed: _fetchBondedDevices,
+          )
         ],
       ),
-      body: Column(
-        children: [
-          // Ícono Bluetooth animado
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 24),
-            child: Column(children: [
-              Icon(Icons.bluetooth_searching, size: 56, color: cs.primary),
-              const SizedBox(height: 8),
-              Text(
-                _scanning ? 'Buscando dispositivos emparejados...' : 'Dispositivos encontrados',
-                style: TextStyle(color: cs.onSurface.withOpacity(0.6), fontSize: 13),
+      body: _isLoading 
+        ? const Center(child: CircularProgressIndicator())
+        : _devices.isEmpty
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.bluetooth_disabled, size: 64, color: Colors.grey),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'No se encontraron dispositivos vinculados.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Primero vincula tu HC-05 en los Ajustes de Bluetooth de tu teléfono.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                    const SizedBox(height: 24),
+                    ElevatedButton(
+                      onPressed: _fetchBondedDevices,
+                      child: const Text('Reintentar'),
+                    )
+                  ],
+                ),
               ),
-            ]),
-          ),
-
-          // Lista de dispositivos
-          Expanded(
-            child: _devices.isEmpty && !_scanning
-                ? Center(
-                    child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      const Text('Sin dispositivos emparejados',
-                          style: TextStyle(color: Colors.grey)),
-                      const SizedBox(height: 12),
-                      Text('Empareja el HC-06 primero en la configuración BT de Android',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                              color: Colors.grey.shade600, fontSize: 12)),
-                    ]),
-                  )
-                : ListView.separated(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    itemCount: _devices.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 8),
-                    itemBuilder: (_, i) {
-                      final dev = _devices[i];
-                      return Card(
-                        color: const Color(0xFF1E1E30),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            side: BorderSide(
-                                color: dev.name?.contains('HC') == true
-                                    ? cs.primary.withOpacity(0.6)
-                                    : Colors.grey.shade800,
-                                width: 0.5)),
-                        child: ListTile(
-                          leading: Icon(Icons.bluetooth,
-                              color: dev.name?.contains('HC') == true
-                                  ? cs.primary : Colors.grey),
-                          title: Text(dev.name ?? 'Desconocido',
-                              style: const TextStyle(fontWeight: FontWeight.w500)),
-                          subtitle: Text(dev.address,
-                              style: const TextStyle(fontSize: 11, color: Colors.grey)),
-                          trailing: ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                                backgroundColor: cs.primary,
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                                textStyle: const TextStyle(fontSize: 12)),
-                            onPressed: () => _connect(dev),
-                            child: const Text('Conectar'),
-                          ),
-                        ),
-                      );
-                    },
+            )
+          : ListView.builder(
+              padding: const EdgeInsets.all(8),
+              itemCount: _devices.length,
+              itemBuilder: (context, index) {
+                final device = _devices[index];
+                return Card(
+                  elevation: 2,
+                  margin: const EdgeInsets.symmetric(vertical: 4),
+                  child: ListTile(
+                    leading: const Icon(Icons.bluetooth, color: Colors.blue),
+                    title: Text(device.name ?? "Dispositivo desconocido"),
+                    subtitle: Text(device.address),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => _connect(device),
                   ),
-          ),
-
-          // Nota de ayuda
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              'PIN del HC-06: 1234  •  Baud rate: 9600',
-              style: TextStyle(color: Colors.grey.shade600, fontSize: 11),
+                );
+              },
             ),
-          ),
-        ],
-      ),
     );
   }
 }
