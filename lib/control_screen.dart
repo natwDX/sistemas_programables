@@ -150,7 +150,7 @@ class _ControlScreenState extends State<ControlScreen> {
                 action: IconButton(
                   icon: const Icon(Icons.refresh, size: 18),
                   onPressed: ctrl.pedirVoltaje,
-                  tooltip: 'Pedir voltaje',
+                  tooltip: 'Actualizar',
                 ),
                 child: Column(children: [
                   // Aguja de posición angular
@@ -173,7 +173,6 @@ class _ControlScreenState extends State<ControlScreen> {
                     children: [
                       _TeleItem(label: 'Posición', value: '${ctrl.posicion}', unit: 'pasos'),
                       _TeleItem(label: 'Ángulo', value: ctrl.grados.toStringAsFixed(1), unit: '°'),
-                      _TeleItem(label: 'Voltaje', value: ctrl.voltaje.toStringAsFixed(2), unit: 'V'),
                       _TeleItem(label: 'Vel actual', value: '${ctrl.velRecibida}', unit: 'ms'),
                     ],
                   ),
